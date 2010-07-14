@@ -1,0 +1,703 @@
+#!/bin/bash
+#
+# RSYNC BACKUP MADE EASY - RBME
+#
+# LICENSE:
+#
+#    RSYNC BACKUP MADE EASY is free software; you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation; either version 2 of the License, or
+#    (at your option) any later version.
+
+#    Relax & Recover is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+
+#    You should have received a copy of the GNU General Public License
+#    along with Relax & Recover; if not, write to the Free Software
+#    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+
+#
+# RSYNC BACKUP MADE EASY - RBME
+#
+# backup other computers via rsync
+#
+# create hard links to keep older versions
+# remove old backups to free disk space
+# talk to backup clients over SSH/RSH/... , so make sure that works without a password
+#
+# parameters: One or several backup sources in the following format:
+#     
+# somehost			Backup / on somehost, you must use the backup-exclude.lst 
+#				file to exclude unwanted mountpoints
+# somehost:/
+# somehost:'/ /var /boot'	Backup the mentioned mountpoints on remote somehost, do not
+#				descend into mountpoints. You can also use the backup-include.lst
+#				file on somehost to add more mountpoints/directories/files to the backup
+# 
+# Notes:
+#
+# - The ability to supply multiple paths as a source relies on rsync itself to recognize it
+# - The trigger for descending into mountpoints or not is the : in the source, if : is present,
+#   then assume that a list of paths is given and do NOT descend into mountpoints. If no : is 
+#   present, then assume that we have to do a simple backup of "everything" (which is compatible 
+#   with older versions of this script)
+# - If the hostpart of the source is localhost or $(uname -n), then a local backup without ssh/rsh will be
+#   performed.
+# - specifying paths with spaces in them is NOT supported as a backup source. Just don't have them !
+# - You can prevent output with VERBOSE=
+# - You can have multiple RBME instances running in parallel by symlinking to the executable and
+#   setting up config files in /etc correspondingly
+# - If running several RBME instances in parallel, please note that the disk space management
+#   will work less precise due to overlaps of deletes. Also, you should have a fast RAID
+#   system because RBME will generate a lot of I/O requests (especially deleting old backups).
+# - Enable debugging with DEBUG=1, will not remove temporary directory with all the ouput files
+# - set SETX=1 to get bash tracing.
+#
+# Written by Schlomo Schapiro <rbme@schlomo.schapiro.org>
+# Licensed under the GPL, see http://www.gnu.org/copyleft/gpl.html for full details
+#
+# Authors:
+#
+# GSS	Schlomo Schapiro  <rbme@schlomo.schapiro.org>
+# FBU	Fridtjof Busse	  <fbusse@probusiness.de>
+#
+# Versions:
+CHANGES='
+2006-07-19 GSS	Initial Version
+2007-03-29 GSS	Added MIN_FREE_AFTER_BACKUP
+2007-03-31 GSS	Allow local backup of localhost or $(uname -n)
+2007-04-01 GSS	Support more complex source definitions, ACLs
+2007-08-15 FBU	Add support for inode checking and some clean-ups
+2007-09-03 GSS	Reorganized code, re-release as RBME
+2007-09-10 GSS	Make report more legible
+2007-09-12 GSS	Add RPM creation and usage
+2007-11-10 GSS	Improved statistical table at end of backup report
+2007-12-24 GSS	set LANG and LC_CTYPE to prevent confusion/errors due to internationalization
+2007-12-24 GSS	Improved output control, Send reports by email
+2007-12-25 GSS	Write logfile in /var/log, Multiple configurations via symlinks to executable
+2007-12-26 GSS	Improvements in report
+2007-12-28 GSS  Fixed a bug that came in with the output control (missing 1>&2 in fixfreespaceforhost)
+2008-05-20 GSS	Fixed a bug that the notion of "today" changed during the run-time of the script, Send an email in case of fatal errors (die), use a lock file to prevent parallel runs of RBME
+2008-06-22 GSS	Use sendmail instead of mail (had some problem with content-type if rbme failed)
+2008-12-09 GSS	set LC_NUMERIC to make sure numbers look like xx.xx and not xx,xx
+2009-01-30 GSS	changed %S to %s for SLES9 compatibility (thanks to werner.flamme@ufz.de)
+2009-08-31 GSS	changed mail sending to sendmail in error routine
+2009-09-01 GSS	fixed stupid bug where SENDMAIL was defined after the first use of die()
+'
+
+COPYRIGHT="Copyright (C) 2006,2009 Schlomo Schapiro"
+LICENSE="Licensed under the GNU General Public License, see
+http://www.gnu.org/licenses/gpl.html for full text"
+
+VERSION="1.6"
+RELEASE="$(echo "$CHANGES" | tail -n 2 | cut -c 1-10)"
+PRODUCT="RBME"
+
+die() {
+	echo "$*" 1>&2
+	if test "$MAILTO" ; then
+		{
+			echo "From: $MAILFROM"
+			echo "To: $MAILTO"
+			echo "Subject: $PRODUCT: $ME backup failed due to an error"
+			echo "Content-Type: text/plain; charset=UTF-8"
+			echo ""
+			echo "$*"
+		} | $SENDMAIL -f "$MAILFROM" $MAILTO
+	fi
+
+
+	exit 1
+}
+
+test "$SETX" && set -x
+# report unset variables
+set -u
+# trace mode
+# set -x
+
+# I need this to make sure that patterns don't appear as patterns if they don't match anything
+shopt -s nullglob
+
+# Who am I ?
+ME="$(basename "$0")"
+
+# NOTE: The values below are just defaults and should be overridden in /etc/rbme.conf
+test -s /etc/rbme.conf && . /etc/rbme.conf
+
+# additionally source /etc/$0.conf if present
+test -s "/etc/$ME.conf" && . "/etc/$ME.conf"
+
+# quiet mode
+VERBOSE=${VERBOSE=yes}
+
+# print report
+REPORT=${REPORT=yes}
+
+# print statistics
+STATISTICS=${STATISTICS=yes}
+
+# send result per email to
+MAILTO="${MAILTO=}"
+MAILFROM="${MAILFROM=root@$(hostname -f)}"
+
+# what to send by mail
+# valid options are all, errorreport, report
+MAILSTYLE="${MAILSTYLE:=all}"
+
+# logfile
+LOGFILE="${LOGFILE=$(date +"/var/log/$ME.log.%d")}"
+
+# your rsync
+RSYNC="${RSYNC:=$(type -p rsync)}"
+
+# your sendmail
+SENDMAIL="${SENDMAIL:=$(type -p sendmail)}"
+
+# how to reach remote systems via rsync
+RSYNC_RSH="${RSYNC_RSH:=ssh}"
+
+# extra rsync options
+# for example: -v to enable verbose more
+# or maybe: -A to enble ACL support (remember to mount the target with ACL support, too !)
+RSYNC_EXTRA_OPTIONS=${RSYNC_EXTRA_OPTIONS:=}
+
+# enable debug features, use this only after you understand this code ...
+DEBUG=${DEBUG=}
+
+
+# where to create backups ($host/$date):
+BACKUP_PATH="${BACKUP_PATH:=/media/backup}"
+
+# Before and after backing up a host we can check for free disk space.
+# The disk space check checks for space (in MB) and free inodes (where appropriate)
+
+# default: 3GB / 50k inodes free before
+MIN_FREE_BEFORE_HOST_BACKUP="${MIN_FREE_BEFORE_HOST_BACKUP:=3000}"
+MIN_INODES_BEFORE_HOST_BACKUP="${MIN_INODES_BEFORE_HOST_BACKUP:=50000}"
+
+# default: 10GB / 100k inodes free before
+MIN_FREE_AFTER_HOST_BACKUP="${MIN_FREE_AFTER_HOST_BACKUP:=10000}"
+MIN_INODES_AFTER_HOST_BACKUP="${MIN_INODES_AFTER_HOST_BACKUP:=100000}"
+
+# How many old backups to keep at least
+MIN_KEEP_OLD_BACKUPS="${MIN_KEEP_OLD_BACKUPS:=5}"
+# we need to keep at least one old backup so that our deletion algorithm will work properly
+test $MIN_KEEP_OLD_BACKUPS -lt 1 && {
+	die "ERROR: You must keep at least 1 old backup ('MIN_KEEP_OLD_BACKUPS' is '$MIN_KEEP_OLD_BACKUPS')"
+}
+
+export BACKUP_PATH MIN_FREE_BEFORE_HOST_BACKUP MIN_INODES_BEFORE_HOST_BACKUP MIN_FREE_AFTER_HOST_BACKUP MIN_INODES_AFTER_HOST_BACKUP MIN_KEEP_OLD_BACKUPS RSYNC RSYNC_RSH RSYNC_EXTRA_OPTIONS VERBOSE REPORT STATISTICS DEBUG MAILTO MAILFROM MAILSTYLE LOGFILE
+
+# how do we call the situation, when the FS does not need free inodes (reiserfs ...) ?
+PLENTY=plenty
+
+# neutralize trouble from localization
+LANG=C
+LC_CTYPE=C
+LC_NUMERIC=C
+
+# collect the return code for later
+return_code=0
+
+if test $# -eq 0 || test "$1" = "-h" -o "$1" = "--help" ; then
+	cat <<EOF
+RSYNC BACKUP MADE EASY version $VERSION / $RELEASE
+$COPYRIGHT
+$LICENSE
+
+Usage: 
+
+$0 <host:/path> ...
+	host:/path is in rsync notation, see rsync(1) for more information
+	Use host without :/path to specify entire host (with certain defaults
+	excluded).
+
+Include / Exclude files:
+	On each backup host, /etc/backup-excludes.lst can be used to specify
+	local excludes (in rsync notation !) and /etc/backup-includes.lst can
+	be used to specify local includes (though usually one uses only excludes,
+	as the includes do NOT include files not part of the :/path spec !).
+
+Instance support:
+	Create symlinks to the executable to create more instances with dedicated
+	configuration. Each instance will have a dedicated logfile and produce
+	different email reports.
+
+Current configuration:
+(change settings in /etc/rbme.conf (Master) and /etc/$ME.conf (Instance))
+EOF
+	for var in BACKUP_PATH MIN_FREE_BEFORE_HOST_BACKUP MIN_INODES_BEFORE_HOST_BACKUP MIN_FREE_AFTER_HOST_BACKUP MIN_INODES_AFTER_HOST_BACKUP MIN_KEEP_OLD_BACKUPS RSYNC RSYNC_RSH RSYNC_EXTRA_OPTIONS VERBOSE REPORT STATISTICS DEBUG MAILTO MAILFROM MAILSTYLE LOGFILE; do
+		printf "\t%30s = %s\n" $var "${!var}"
+	done
+
+	echo -e "\nProject homepage: http://www.schapiro.org/schlomo/projects\n"
+	exit 1
+fi
+
+
+############################################## getfreespace
+# return free disk space in MB of BACKUP_PATH
+
+function getfreespace () {
+
+	# use %s instead of %S because older stat versions do not support %S and
+	# nobody could tell me the significant difference between %s and %S.
+	#
+	tmp=( $(stat -c "%s %a" -f "$BACKUP_PATH" 2>&1) ) || {
+		die "ERROR ! Could not get free disk space for '$BACKUP_PATH':
+${tmp[@]}"
+	}
+	# the output is s.th. like 4096 1489723 which means that there are 1489723 free
+	# blocks of 4096 byte each. To calculate the MegaByte from that without making
+	# the number bigger, we calculate the blocks-per-MB ratio first
+	let "blocks_in_mb=1024*1024/tmp[0]"
+	# now we devide the # of blocks by the # of blocks_in_mb for the result
+	let "free_mb=tmp[1]/blocks_in_mb"
+	echo $free_mb
+}
+
+############################################## getfreeinodes
+# return free inodes or "plenty" on file systems with unlimited inodes
+# check BACKUP_PATH
+
+function getfreeinodes () {
+
+	inodes="$(stat -c "%d" -f "$BACKUP_PATH" 2>&1)" || {
+		die "ERROR ! Could not get free inodes for '$BACKUP_PATH':
+$inodes"
+	}
+	
+	# here we assume that any filesystem will have at least 1 inode free,
+	# if it uses inodes at all.
+	#
+	if test "$inodes" -eq 0 ; then
+		echo "$PLENTY"
+	else
+		echo $inodes
+	fi
+}
+
+############################################# fixfreespaceforhost
+# check free space & inodes and clean up old backups
+# $1 is the host for which to check & free space
+# $2 is the free space in MB
+# $3 is the free inodes or 0 to disable the test
+
+function fixfreespaceforhost () {
+
+	client="$1"
+	min_space="$2"
+	min_inodes="$3"
+
+	test -z "$today" && die "today not defined in fixfreespaceforhost"
+
+	space=$(getfreespace) ; inodes=$(getfreeinodes)
+
+	# if inodes is PLENTY we disable the inode test by setting fake numbers
+	# that are always OK
+	test "$inodes" = "$PLENTY" && let min_inodes=0 inodes=1
+
+	# find list of last backups (full path to last backup) as ARRAY
+	# this list is already sorted in chronological order (due to natural sorting of
+	# YYYY-MM-dd
+
+	backups=( $(ls -d "$BACKUP_PATH/$client/"*-*-* | grep -v $today | sort) )
+
+	# lastbackup is last value in array or path for today
+	if test ${#backups[@]} -gt 0 ; then
+		lastbackup="${backups[${#backups[@]}-1]}" # last value in array
+	else
+		# if no lastbackup is found, then set the same dir as current backup target
+		# in any case we will make a full backup
+		lastbackup="$BACKUP_PATH/$client/$today"
+		backups=""
+	fi
+	
+	if test $space -lt $min_space -o $inodes -lt $min_inodes ; then
+		echo -e "\tRemoving old backups to free some disk space" 1>&2
+		numbackups=${#backups[*]}
+		echo -e "\tOldest backup (from $numbackups): $(basename "$backups")" 1>&2
+		# echo -e "\t${backups[*]}" | sed -e 's/[ ]/\n\t/g' 1>&2
+		deleted=0
+		# recursively delete old backups as long as there are more than 7 backups 
+		# and less than 10G free space or 100k free inodes
+		# NASTY TRICK: $deleted is incremented with each round and thus corresponds
+		# accidentially with the next backup to delete :-)
+		while test $((numbackups-deleted)) -gt $MIN_KEEP_OLD_BACKUPS \
+			&& \
+			test $space -lt $min_space -o $inodes -lt $min_inodes
+		do
+			echo -en "\tHaving $space MB" 1>&2
+			test $min_inodes -gt 0 && echo -n " & $inodes inodes" 1>&2
+			echo -n ", deleting ${backups[deleted]}" 1>&2
+			pushd "$BACKUP_PATH/$client" >/dev/null # for safety reasons chdir there and delete only the basename
+			start=$SECONDS
+			rm -Rf $(basename ${backups[deleted]}) # remember, first index is 0 !!
+			popd >/dev/null
+			echo " in $((SECONDS-start)) seconds." 1>&2
+			let deleted++
+			space=$(getfreespace) ; inodes=$(getfreeinodes)
+		done
+	fi # if free space less than $MIN_FREE MB or $MIN_INODES
+	
+	# return $lastbackup
+	echo "$lastbackup"
+}
+
+# some output control functions
+
+# file to duplicate output to, defaults to empty
+export extra_output_file=
+
+# output write the output to the general output file and optionally to the extra output file
+# in verbose mode, output goes also to the screen.
+function output () {
+	test "$VERBOSE" && tee -a $MYTEMP/output $extra_output_file || tee -a $MYTEMP/output $extra_output_file >/dev/null
+}
+
+##### end of function definitions ##############
+################################################
+
+# define some globals:
+
+# the definition of today should not change during the runtime of RBME since otherwise the 
+# removal of old backups WILL FAIL if the day changes during the run-time of the script.
+today="$(date "+%Y-%m-%d")"
+
+# run some tests before starting to do anything useful
+	
+if ! test -d "$BACKUP_PATH" ; then
+	die "ERROR: Backup path '$BACKUP_PATH' is not a directory !"
+fi
+
+if ! test "$MAILSTYLE" = "all" -o "$MAILSTYLE" = "errorreport" -o "$MAILSTYLE" = "report" ; then
+	die "ERROR: MAILSTYLE ['$MAILSTYLE'] must be one of 'all', 'erroreport' or 'report'"
+fi
+
+# create a lock file to prevent multiple parallel runs of the same RBME
+LOCKFILE=/var/lock/$PRODUCT.$ME.lock
+lockfile -r2 "$LOCKFILE" || die "
+ERROR ! Could not create lockfile. Probably another instance of 
+RBME [$ME] is running. Please check $LOCKFILE and remove it if
+no other instance is running and then try again.
+"
+
+# create our temporary area
+MYTEMP=$(mktemp -d /tmp/$PRODUCT.$ME.XXXXXXXXXXXXXXXXXX)
+# cleanup temp area
+test "$DEBUG" && trap "echo Please remove '$MYTEMP' !" 0 || trap 'rm -Rf "$MYTEMP" "$LOCKFILE"' 0
+
+# print splash screen for all output-generating features
+extra_output_file=$MYTEMP/header
+
+freespacebefore=$(getfreespace)
+freeinodesbefore=$(getfreeinodes)
+
+output <<EOF
+RSYNC BACKUP MADE EASY version $VERSION / $RELEASE
+$COPYRIGHT
+$LICENSE
+
+$ME backing up to $BACKUP_PATH ($freespacebefore MB & $freeinodesbefore inodes available)
+Free disk space requirements:
+	$MIN_FREE_BEFORE_HOST_BACKUP MB & $MIN_INODES_BEFORE_HOST_BACKUP inodes before host backup
+	$MIN_FREE_AFTER_HOST_BACKUP MB & $MIN_INODES_AFTER_HOST_BACKUP inodes after host backup
+
+EOF
+
+let backup_ok=0 backup_error=0 backup_total=0
+
+for source in "$@" ; do
+
+	# source can be
+	# somehost (backup / and cross over mountpoints)
+	# somehost:'/ /var /boot' (backup these paths on somehost, do not cross into mountpoints)
+	# 
+	# make local backup if somehost is localhost or $(uname -n)
+
+	# should be -x or empty
+	rsync_mountpoints_option=""
+	rsync_host=""
+	rsync_paths=""
+	rsync_sources=()
+
+	case "$source" in
+		*:*)
+			rsync_host="${source%%:*}"
+			rsync_paths="${source##*:}"
+			rsync_mountpoints_option="-x"
+		;;
+		*)
+			rsync_host="$source"
+			rsync_paths="/"
+			rsync_mountpoints_option=""
+		;;
+	esac
+	
+	client="$rsync_host"
+
+	# make local backup ?
+	# the problem is that the syntax for specifying multiple source paths differs for
+	# local and remote backup sources (see rsync manpage). For local backups each
+	# path MUST be given as a separate argument, for remote sources the paths must
+	# be included in the same single argument, separated internally with SPACES
+	case "$rsync_host" in
+		localhost|$(uname -n))
+			# break up multiple paths into multiple array members, hence no "" here !!!
+			rsync_sources=( $rsync_paths )
+			# set client to canonical form, e.g. our nodename
+			client="$(uname -n)"
+			is_local=1
+		;;
+		*)
+			rsync_sources="${rsync_host}:${rsync_paths}"
+			client="$rsync_host"
+			is_local=
+		;;
+	esac
+
+	let backup_total++
+
+
+	# output control, extra output file for each client
+	extra_output_file=$MYTEMP/"$client"
+
+	# put the remaining part into a subshell to better collect the output.
+	(
+
+		# this subshell has a local return_code
+		let return_code=0
+
+		# echo "Sources: ${rsync_sources[@]}"
+
+		if ! test "$is_local" ; then
+			# make sure that client is reachable, if not localhost
+			if ! error="$( $RSYNC_RSH "$rsync_host" true 2>&1)" ; then
+				cat <<-EOF
+			
+				ERROR ! Host '$rsync_host' could not be reached via '$RSYNC_RSH':
+				$error
+
+				EOF
+				exit 2
+			fi
+		fi
+
+		# create backup directory
+		mkdir -p "$BACKUP_PATH/$client/$today/"	
+
+		# verify and free up space before, if required
+		lastbackup="$(fixfreespaceforhost "$client" $MIN_FREE_BEFORE_HOST_BACKUP $MIN_INODES_BEFORE_HOST_BACKUP)" || \
+			die "ERROR in fixfreespaceforhost:
+	$lastbackup
+	"
+
+		test -d "$lastbackup" || die "ERROR: lastbackup '$lastbackup' must be a directory !"
+		df_before=$(getfreespace)
+		df_inode_before=$(getfreeinodes)
+
+		echo "Backup of '$rsync_host:${rsync_paths[@]}' in $client/$today against ${lastbackup##*/}"
+
+		let starttime=SECONDS
+
+		# Sync files
+		# --relative makes rsync append all source paths COMPLETELY onto the destination path
+		$RSYNC $RSYNC_EXTRA_OPTIONS --link-dest="$lastbackup/" --relative -aSH \
+			--ignore-errors $rsync_mountpoints_option \
+			--exclude-from=<(
+					# Standard backup-excludes.lst, only needed if rsync_mountpoints_option is not set
+					test "$rsync_mountpoints_option" || cat <<-EOF
+					/proc/*
+					/tmp/*
+					/sys/*
+					/dev/shm/*
+					/dev/pts/*
+					/mnt/cdrom*/*
+					/mnt/floppy*/*
+					/media/cdrom*/*
+					/media/floppy*/*
+					/vmfs/*
+					EOF
+					# read backup-excludes.lst from (remote) backup source
+					if test "$is_local" ; then
+						# exclude local backup path for backups on the 
+						# backup machine itself to prevent recursive backups
+						echo "$BACKUP_PATH/*"
+						test -s /etc/backup-excludes.lst && cat /etc/backup-excludes.lst
+					else
+						$RSYNC_RSH "$rsync_host" \
+							"test -s /etc/backup-excludes.lst && cat /etc/backup-excludes.lst"
+					fi
+					) \
+			--include-from=<(
+					# include optional backup-includes.lst from (remote) backup source
+					if test "$is_local" ; then
+						test -s /etc/backup-includes.lst && cat /etc/backup-includes.lst
+					else
+						$RSYNC_RSH "$rsync_host" \
+							"test -s /etc/backup-includes.lst && cat /etc/backup-includes.lst"
+					fi
+					) \
+			"${rsync_sources[@]}" "$BACKUP_PATH/$client/$today/"
+		let ret=$?
+
+		if test "$ret" -gt 0 ; then
+			# some rsync errors are "normal", filter them out:
+			let "ret^=24"	# source files vanished during transfer
+		fi
+		# record return code
+		let "return_code|=ret"
+
+		df_after=$(getfreespace)
+		df_inode_after=$(getfreeinodes)
+
+		let runtime=SECONDS-starttime
+		printf "\tBackup runtime was %02d:%02d:%02d\n" $((runtime/60/60)) $(((runtime/60)%60)) $((runtime%60))
+		echo -en "\tThe backup for $client utilizes $((df_before-df_after)) MB"
+		if test "$df_inode_after" != "$PLENTY" ; then
+			echo " & $((df_inode_before-df_inode_after)) inodes"
+		else
+			echo ""
+		fi
+		
+		# verify and free up space after, if required
+		error="$(fixfreespaceforhost "$client" $MIN_FREE_AFTER_HOST_BACKUP $MIN_INODES_AFTER_HOST_BACKUP)" || \
+			die "ERROR in fixfreespaceforhost:
+	$error
+	"
+		echo # print empty line for nicer output
+
+		# exit subshell with proper return code
+		exit $return_code
+
+	) 2>&1 | output
+
+	let ret=$PIPESTATUS
+
+	let "return_code|=ret"
+
+	if test "$ret" -eq 0 ; then
+		let backup_ok++
+	else
+		let backup_error++
+		echo "$client" >>$MYTEMP/backup_error.lst
+	fi
+
+
+	# disable extra output file
+	extra_output_file=
+
+done # for each $CLIENTS
+
+extra_output_file=$MYTEMP/report
+
+if test "$REPORT" ; then
+	output <<-EOF
+	Backup Summary:
+	-------------------------------------------------
+
+	Backup targets: 
+
+	$(
+		for target in "$@" ; do
+			echo "	$target"
+		done
+	)
+
+	EOF
+
+	if test "$backup_total" -eq "$backup_ok" ; then
+		output <<<"All $backup_total targets backed up successfully."
+	else
+		cat <<-EOF | output 
+			$backup_ok of $backup_total clients backed up successfully. The following clients failed:
+	
+			$(tr  "\n" " " <$MYTEMP/backup_error.lst)
+
+		EOF
+		# write errors only to report and not to general output file (not to repeat them)
+		while read client ; do
+			cat "$MYTEMP/$client" >>$extra_output_file
+		done <$MYTEMP/backup_error.lst
+	fi
+fi
+
+output <<EOF
+
+Backup filesystem has now $(getfreespace) MB available
+Backup filesystem has now $(getfreeinodes) inodes available
+Total runtime was $(printf "%02d:%02d:%02d" $((SECONDS/60/60)) $(((SECONDS/60)%60)) $((SECONDS%60)))
+
+EOF
+
+test "$LOGFILE" && cat <<-EOF | output
+	See '$LOGFILE' for full details.
+
+EOF
+
+test "$STATISTICS" && {
+	cat <<-EOF
+	Distribution of backup history:
+	-------------------------------------------------
+	EOF
+
+	pushd "$BACKUP_PATH" >/dev/null
+	dirs=()
+	history=()
+	c=0
+	maxhist=0
+	total=0
+	shopt -u nullglob
+	for dir in * ; do 
+		n=$(ls -d -1 $dir/*-*-* 2>/dev/null | wc -l)
+		test $n -gt 0 || continue
+		dirs[c]=$dir
+		history[c]=$n
+		let total+=n
+		test $n -gt $maxhist && let maxhist=n
+		let c++
+	done
+
+	printf "%10s%10s   %s\n" Backups "%" Target
+	let c-- # undo last c++
+	for k in $(seq 0 $c) ; do
+		let perc="10000*history[k]/total"
+		printf "%10s%10.2f   %s\n" ${history[k]} $((perc/100)).$((perc%100)) ${dirs[k]}
+	done
+} | output
+
+
+# print thank you for all output generating features
+extra_output_file=$MYTEMP/footer
+
+output <<EOF
+-------------------------------------------------
+Thank you for using RSYNC BACKUP MADE EASY
+
+EOF
+
+extra_output_file=
+
+# what to send by email (but only if the mailstyle is not error and all went fine)
+if test "$MAILTO" && ! test "$MAILSTYLE" = errorreport -a "$backup_total" -eq "$backup_ok" ; then
+	{
+		echo "From: $MAILFROM"
+		echo "To: $MAILTO"
+		echo "Subject: $PRODUCT: $ME backup $(test "$backup_total" -eq "$backup_ok" && echo successful || echo failed)"
+		echo "Content-Type: text/plain; charset=UTF-8"
+		echo ""
+		case "$MAILSTYLE" in
+			all) cat $MYTEMP/output ;;
+			*report) cat $MYTEMP/{header,report,footer} ;;
+			*) die "ERROR: Unknown MAILSTYLE ['$MAILSTYLE'] !" ;;
+		esac
+	} | $SENDMAIL -f "$MAILFROM" $MAILTO
+fi
+
+# export logfile if requested
+test "$LOGFILE"	&& cat <$MYTEMP/output >"$LOGFILE"
+
+exit $return_code # exit with a clean result

@@ -1,0 +1,276 @@
+RSYNC BACKUP MADE EASY
+
+About
+-------------------------------------
+
+Using rsync for backups is becoming more and more popular on UNIX/Linux 
+systems. Especially the variant with hardlinks on the backup media to conserve 
+disk space has proven itself to be a very reliable backup solution. The method 
+is already widely published on the Internet (e.g. this is a nice introduction), 
+so that I will save myself the trouble of repeating it.
+
+In a nutshell you get perpetual incremental backups that appear as full backups 
+(for each day) and thus allow easy restore or further copying to tape etc. 
+After the initial full backup RBME will forever do incremental backups against 
+the last backup to conserve time and network bandwidth.
+
+RBME is a simple tool to assist in implementing a general backup solution based 
+on rsync and hardlinks with an automated management of the disk space on the 
+backup media. This is achieved by removing old backups from the backup media in 
+a way which will ensure that (over the long run) the amount of backups should 
+even out for all hosts involved.
+
+This is also the major reason for me to write this script, I didn't find a 
+suitable script (that would manage the backup space and also watch the inodes) 
+when I needed it. The other reason is of course the fact that studying another 
+script would take at least the same time as writing my own and in such cases I 
+tend to write my own.
+
+
+Usage
+------------------------------------
+
+RBME expects you to provide a (large) backup space, preferably on a filesystem 
+of it's own (it makes the disk space management easier). After configuring RBME 
+with your backup path and the thresholds that seem appropriately for your 
+environment, simply run rbme for each backup host. By default it will use rsync 
+over ssh to copy that host to the backup filesystem (Use ssh -c blowfish-cbc to 
+somewhat speed up your backups by choosing a faster cipher, if your security 
+policy allows for that). Example:
+
+# rbme host3 host2 host1
+
+This example will simply backup the hosts host3, host2 and host1 to your backup 
+space. Every day on which you run RBME it will produce a new subdirectory in the 
+backup space for that day, so that over time your backup space will look like 
+that:
+
+$BACKUP_PATH/
+|-- host3/
+|   |-- 2007-09-02/
+|   |-- 2007-09-03/
+|   |-- 2007-09-05/
+|   |-- 2007-09-06/
+|   |-- 2007-09-07/
+|   |-- 2007-09-08/
+|   |-- 2007-09-09/
+|   |-- 2007-09-10/
+|   `-- 2007-09-11/
+|-- host2/
+|   |-- 2007-09-02/
+|   |-- 2007-09-03/
+|   |-- 2007-09-05/
+|   |-- 2007-09-06/
+|   |-- 2007-09-07/
+|   |-- 2007-09-08/
+|   |-- 2007-09-09/
+|   |-- 2007-09-10/
+|   `-- 2007-09-11/
+`-- host1/
+    |-- 2007-09-05/
+    |-- 2007-09-06/
+    |-- 2007-09-07/
+    |-- 2007-09-08/
+    |-- 2007-09-09/
+    |-- 2007-09-10/
+    `-- 2007-09-11/
+
+Under each date subdirectory you will find a complete copy of the host from 
+that day. Usually RBME is run from cron on a daily or nightly base to keep all 
+hosts always backed up.
+
+
+Report
+-------------------------------------
+
+RBME produces a nice report of it's activities that serves as a daily backup 
+report:
+
+RSYNC BACKUP MADE EASY version 1.4 / 2008-05-20
+Copyright (C) 2006,2008 Schlomo Schapiro, probusiness Berlin AG
+Licensed under the GNU General Public License, see
+http://www.gnu.org/licenses/gpl.html for full text
+
+rbme backing up to /media/backup (30127 MB & 20183270 inodes available)
+Free disk space requirements:
+	20000 MB & 100000 inodes before host backup
+	30000 MB & 200000 inodes after host backup
+
+Backup of 'mars:/' in mars/2008-05-10 against 2008-05-09
+	Backup runtime was 00:03:28
+	The backup for mars utilizes 81 MB & 19814 inodes
+
+Backup of 'lucky:/ /home /var /media/nfsroot /media/install/sles10sp1' in lucky/2008-05-10 against 2008-05-09
+	Backup runtime was 00:59:53
+	The backup for lucky utilizes 1862 MB & 174457 inodes
+	Removing old backups to free some disk space
+	Oldest backup (from 124): 2007-11-27
+	Having 28184 MB & 19988997 inodes, deleting /media/backup/lucky/2007-11-27 in 939 seconds.
+	Having 29737 MB & 20161230 inodes, deleting /media/backup/lucky/2007-11-28 in 931 seconds.
+
+Backup of 'gw:/' in gw/2008-05-10 against 2008-05-09
+	Backup runtime was 00:00:25
+	The backup for gw utilizes 17 MB & 2174 inodes
+
+Backup of 'web:/' in web/2008-05-10 against 2008-05-09
+	Backup runtime was 00:02:43
+	The backup for web utilizes 95 MB & 8552 inodes
+
+Backup of 'mysql:/' in mysql/2008-05-10 against 2008-05-09
+	Backup runtime was 00:01:14
+	The backup for mysql utilizes 42 MB & 5436 inodes
+
+Backup of 'mail:/' in mail/2008-05-10 against 2008-05-09
+	Backup runtime was 00:01:22
+	The backup for mail utilizes 40 MB & 5859 inodes
+
+Backup of 'po:/' in po/2008-05-10 against 2008-05-09
+	Backup runtime was 00:05:11
+	The backup for po utilizes 281 MB & 6951 inodes
+
+Backup Summary:
+-------------------------------------------------
+
+Backup targets: 
+
+	mars:/
+	lucky:/ /home /var /media/nfsroot /media/install/sles10sp1
+	gw
+	web
+	mysql
+	mail
+	po
+
+All 7 targets backed up successfully.
+
+Backup filesystem has now 30819 MB available
+Backup filesystem has now 20304589 inodes available
+Total runtime was 01:45:51
+
+See '/var/log/rbme.log.10' for full details.
+
+Distribution of backup history:
+-------------------------------------------------
+   Backups         %   Target
+       204     12.26   gw
+       123      7.39   lucky
+       307     18.46   mail
+       177     10.64   mars
+       312     18.76   mysql
+       260     15.63   po
+       280     16.83   web
+-------------------------------------------------
+Thank you for using RSYNC BACKUP MADE EASY
+
+You should use the information about inode requirements to fine-tune the RBME 
+configuration to guarantee sufficient free inodes before the backup starts. The 
+amount of used MB and inodes gives an indication about the change rate of each 
+host as only changed files (or new directories) occupy new inodes. Finally RBME 
+gives a short statistical overview about the amount of old backups kept for 
+each host.
+
+
+Configuration
+--------------------------------
+
+RBME comes with a configuration file in /etc/rbme.conf where you should set 
+your own values for the amount of free space or inodes that RBME should keep on 
+your backup filesystem (hence better to use a dedicated filesystem). You can 
+also set how many backups to always keep, even if it would mean violation the 
+disk space thresholds. This ensures to always keep a minimum amount of old 
+backups.
+
+Specify the hosts and paths to backup as parameters to RBME. Two formats are 
+recognized:
+host
+	Backup the entire host, crossing over mountpoints. Some typical mountpoints 
+	are excluded by default, but make sure that you don't backup data 
+	unintentionally (like NFS mounts etc.).
+'host:/ /var /boot /home'
+	Backup the specified paths on the remote host (you cannot specify a path 
+	with a blank in it here, this is an rsync issue, not RBME). In this mode RBME 
+	will not descend into mount points, hence you have to specify all mount points 
+	or paths to backup here. This method also safeguards against accidentially 
+	backing up temporary NFS mounts etc. and is the recommended way to use RBME.
+
+Excludes are managed locally on each backup host, to keep the information local 
+to the host (and allow a local admin to manage his/her own excludes). Simply 
+create a file /etc/backup-excludes.lst on each host to exclude files and 
+directories. Please refer to the rsync manpage (section INCLUDE/EXCLUDE PATTERN 
+RULES) for full details on the format. A small example will suffice here:
+
+/media/stuff/backup/*
+/media/scratch/backup/*
+/media/files/backup/*
+
+This example excludes various other backup directories on a server from this 
+backup. The /* notation makes sure that the directory itself is backed up, but 
+not the content.
+
+To verify the configuration simply run RBME without a parameter:
+
+# rbme
+RSYNC BACKUP MADE EASY version 1.4 / 2008-05-20
+Copyright (C) 2006,2007 Schlomo Schapiro, probusiness Berlin AG
+Licensed under the GNU General Public License, see
+http://www.gnu.org/licenses/gpl.html for full text
+
+Usage:
+
+/usr/bin/rbme <host:/path> ...
+        host:/path is in rsync notation, see rsync(1) for more information
+        Use host without :/path to specify entire host (with certain defaults
+        excluded).
+
+Include / Exclude files:
+        On each backup host, /etc/backup-excludes.lst can be used to specify
+        local excludes (in rsync notation !) and /etc/backup-includes.lst can
+        be used to specify local includes (though usually one uses only excludes,
+        as the includes do NOT include files not part of the :/path spec !).
+
+Instance support:
+        Create symlinks to the executable to create more instances with dedicated
+        configuration. Each instance will have a dedicated logfile and produce
+        different email reports.
+
+Current configuration:
+(change settings in /etc/rbme.conf (Master) and /etc/rbme.conf (Instance))
+                           BACKUP_PATH = /media/backup
+           MIN_FREE_BEFORE_HOST_BACKUP = 20000
+         MIN_INODES_BEFORE_HOST_BACKUP = 100000
+            MIN_FREE_AFTER_HOST_BACKUP = 30000
+          MIN_INODES_AFTER_HOST_BACKUP = 200000
+                  MIN_KEEP_OLD_BACKUPS = 5
+                                 RSYNC = /usr/bin/rsync
+                             RSYNC_RSH = ssh -c blowfish-cbc
+                   RSYNC_EXTRA_OPTIONS = 
+                               VERBOSE = 
+                                REPORT = yes
+                            STATISTICS = yes
+                                 DEBUG = 
+                                MAILTO = your@email-address.com
+                              MAILFROM = root@your.host.name.com
+                             MAILSTYLE = report
+                               LOGFILE = /var/log/rbme.log.20
+
+Project homepage: http://www.schapiro.org/schlomo/projects
+
+Installation
+--------------------------
+
+RBME is distributed as tar.gz archive or as noarch RPM, which is the 
+recommended installation method for RPM-based systems. After installing RBME 
+you have to edit /etc/rbme.conf to adapt RBME to your environment (at least set 
+the backup path).
+
+Start from doing some test runs with a few hosts to get the feeling for RBME 
+and then you can create a cron job that will run RBME regularly and mail the 
+report back to you.
+
+
+Feedback
+---------------------------
+
+You can contact me at rbme@schlomo.schapiro.org to send me your feedback, thanks and patches
+
+Schlomo Schapiro
