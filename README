@@ -31,8 +31,8 @@ Usage
 ------------------------------------
 
 RBME expects you to provide a (large) backup space, preferably on a filesystem 
-of it's own (it makes the disk space management easier). After configuring RBME 
-with your backup path and the thresholds that seem appropriately for your 
+of its own (it makes the disk space management easier). After configuring RBME 
+with your backup path and the thresholds that seem appropriate for your 
 environment, simply run rbme for each backup host. By default it will use rsync 
 over ssh to copy that host to the backup filesystem (Use ssh -c blowfish-cbc to 
 somewhat speed up your backups by choosing a faster cipher, if your security 
