@@ -1,0 +1,14 @@
+Package: rbme
+Version: 2
+Priority: optional
+Section: misc
+Architecture: all
+Maintainer: Schlomo Schapiro <schlomo+packaging@schapiro.org>
+Depends: procmail, rsync, ssh-client
+Description: RSYNC BACKUP MADE EASY
+ Simple rsync backups for multiple systems with hardlinks for old versions
+  - automatic backup disk space management
+  - define backup excludes on each backup target
+  - email reports with statistics
+ .
+ Configuration is in /etc/rbme.conf

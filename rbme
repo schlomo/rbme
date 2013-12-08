@@ -85,13 +85,15 @@ CHANGES='
 2009-01-30 GSS	changed %S to %s for SLES9 compatibility (thanks to werner.flamme@ufz.de)
 2009-08-31 GSS	changed mail sending to sendmail in error routine
 2009-09-01 GSS	fixed stupid bug where SENDMAIL was defined after the first use of die()
+2009-09-27 GSS	Display free space in usage
+2013-12-08 GSS	Update URLs, version schema, default excludes, prevent backup to / file-system, read /etc/rbme.local.conf
 '
 
-COPYRIGHT="Copyright (C) 2006,2009 Schlomo Schapiro"
+COPYRIGHT="Copyright (C) 2006-2013 Schlomo Schapiro"
 LICENSE="Licensed under the GNU General Public License, see
 http://www.gnu.org/licenses/gpl.html for full text"
 
-VERSION="1.6"
+VERSION="2"
 RELEASE="$(echo "$CHANGES" | tail -n 2 | cut -c 1-10)"
 PRODUCT="RBME"
 
@@ -129,6 +131,9 @@ test -s /etc/rbme.conf && . /etc/rbme.conf
 
 # additionally source /etc/$0.conf if present
 test -s "/etc/$ME.conf" && . "/etc/$ME.conf"
+
+# always load local settings last, overriding everything else
+test -s /etc/rbme.local.conf && . /etc/rbme.local.conf
 
 # quiet mode
 VERBOSE=${VERBOSE=yes}
@@ -202,41 +207,6 @@ LC_NUMERIC=C
 # collect the return code for later
 return_code=0
 
-if test $# -eq 0 || test "$1" = "-h" -o "$1" = "--help" ; then
-	cat <<EOF
-RSYNC BACKUP MADE EASY version $VERSION / $RELEASE
-$COPYRIGHT
-$LICENSE
-
-Usage: 
-
-$0 <host:/path> ...
-	host:/path is in rsync notation, see rsync(1) for more information
-	Use host without :/path to specify entire host (with certain defaults
-	excluded).
-
-Include / Exclude files:
-	On each backup host, /etc/backup-excludes.lst can be used to specify
-	local excludes (in rsync notation !) and /etc/backup-includes.lst can
-	be used to specify local includes (though usually one uses only excludes,
-	as the includes do NOT include files not part of the :/path spec !).
-
-Instance support:
-	Create symlinks to the executable to create more instances with dedicated
-	configuration. Each instance will have a dedicated logfile and produce
-	different email reports.
-
-Current configuration:
-(change settings in /etc/rbme.conf (Master) and /etc/$ME.conf (Instance))
-EOF
-	for var in BACKUP_PATH MIN_FREE_BEFORE_HOST_BACKUP MIN_INODES_BEFORE_HOST_BACKUP MIN_FREE_AFTER_HOST_BACKUP MIN_INODES_AFTER_HOST_BACKUP MIN_KEEP_OLD_BACKUPS RSYNC RSYNC_RSH RSYNC_EXTRA_OPTIONS VERBOSE REPORT STATISTICS DEBUG MAILTO MAILFROM MAILSTYLE LOGFILE; do
-		printf "\t%30s = %s\n" $var "${!var}"
-	done
-
-	echo -e "\nProject homepage: http://www.schapiro.org/schlomo/projects\n"
-	exit 1
-fi
-
 
 ############################################## getfreespace
 # return free disk space in MB of BACKUP_PATH
@@ -278,6 +248,17 @@ $inodes"
 	else
 		echo $inodes
 	fi
+}
+
+
+############################################# is_on_root_fs
+# check if given path or file is on / file-system
+# $1 is the path or file to check
+
+function is_on_root_fs {
+	fs_id=$(stat -c %d "$1") || die "Could not stat '$1'"
+	root_fs_id=$(stat -c %d /)
+	(( fs_id == root_fs_id ))
 }
 
 ############################################# fixfreespaceforhost
@@ -361,6 +342,59 @@ function output () {
 ##### end of function definitions ##############
 ################################################
 
+############################################## Usage
+# print usage
+if test $# -eq 0 || test "$1" = "-h" -o "$1" = "--help" ; then
+	cat <<EOF
+RSYNC BACKUP MADE EASY version $VERSION / $RELEASE
+$COPYRIGHT
+$LICENSE
+
+Usage: 
+
+$0 <host:/path> ...
+	host:/path is in rsync notation, see rsync(1) for more information
+	Use host without :/path to specify entire host (with certain defaults
+	excluded).
+
+Include / Exclude files:
+	On each backup host, /etc/backup-excludes.lst can be used to specify
+	local excludes (in rsync notation !) and /etc/backup-includes.lst can
+	be used to specify local includes (though usually one uses only excludes,
+	as the includes do NOT include files not part of the :/path spec !).
+
+Instance support:
+	Create symlinks to the executable to create more instances with dedicated
+	configuration. Each instance will have a dedicated logfile and produce
+	different email reports.
+
+Current configuration:
+(change settings in /etc/rbme.conf, /etc/rbme.local.conf (Master) and /etc/$ME.conf (Instance))
+EOF
+	for var in BACKUP_PATH MIN_FREE_BEFORE_HOST_BACKUP MIN_INODES_BEFORE_HOST_BACKUP MIN_FREE_AFTER_HOST_BACKUP MIN_INODES_AFTER_HOST_BACKUP MIN_KEEP_OLD_BACKUPS RSYNC RSYNC_RSH RSYNC_EXTRA_OPTIONS VERBOSE REPORT STATISTICS DEBUG MAILTO MAILFROM MAILSTYLE LOGFILE; do
+		printf "\t%30s = %s\n" $var "${!var}"
+	done
+
+	if is_on_root_fs "$BACKUP_PATH" ; then
+		cat <<EOF
+
+WARNING! $BACKUP_PATH is not mounted, not showing free disk space and Inodes
+
+EOF
+	else
+		cat <<EOF
+
+Free disk space in $BACKUP_PATH is $(getfreespace) MB and $(getfreeinodes) Inodes.
+
+EOF
+	fi
+	echo -e "\nProject homepage: https://github.com/schlomo/rbme\n"
+	exit 1
+fi
+
+
+
+
 # define some globals:
 
 # the definition of today should not change during the runtime of RBME since otherwise the 
@@ -371,6 +405,10 @@ today="$(date "+%Y-%m-%d")"
 	
 if ! test -d "$BACKUP_PATH" ; then
 	die "ERROR: Backup path '$BACKUP_PATH' is not a directory !"
+fi
+
+if ! is_on_root_fs "$BACKUP_PATH" ; then
+	die "ERROR: Backup path '$BACKUP_PATH' is on /, must be on a different file-system !"
 fi
 
 if ! test "$MAILSTYLE" = "all" -o "$MAILSTYLE" = "errorreport" -o "$MAILSTYLE" = "report" ; then
@@ -512,14 +550,15 @@ for source in "$@" ; do
 					test "$rsync_mountpoints_option" || cat <<-EOF
 					/proc/*
 					/tmp/*
+					/run/*
 					/sys/*
 					/dev/shm/*
 					/dev/pts/*
-					/mnt/cdrom*/*
-					/mnt/floppy*/*
-					/media/cdrom*/*
-					/media/floppy*/*
+					/mnt/*
+					/media/*
 					/vmfs/*
+					/**/lost+found/
+                    /**/.gvfs
 					EOF
 					# read backup-excludes.lst from (remote) backup source
 					if test "$is_local" ; then
