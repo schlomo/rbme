@@ -93,7 +93,7 @@ COPYRIGHT="Copyright (C) 2006-2013 Schlomo Schapiro"
 LICENSE="Licensed under the GNU General Public License, see
 http://www.gnu.org/licenses/gpl.html for full text"
 
-VERSION="2"
+VERSION=0
 RELEASE="$(echo "$CHANGES" | tail -n 2 | cut -c 1-10)"
 PRODUCT="RBME"
 
