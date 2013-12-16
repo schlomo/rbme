@@ -407,7 +407,7 @@ if ! test -d "$BACKUP_PATH" ; then
 	die "ERROR: Backup path '$BACKUP_PATH' is not a directory !"
 fi
 
-if ! is_on_root_fs "$BACKUP_PATH" ; then
+if is_on_root_fs "$BACKUP_PATH" ; then
 	die "ERROR: Backup path '$BACKUP_PATH' is on /, must be on a different file-system !"
 fi
 
