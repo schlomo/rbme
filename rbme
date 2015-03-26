@@ -87,6 +87,7 @@ CHANGES='
 2009-09-01 GSS	fixed stupid bug where SENDMAIL was defined after the first use of die()
 2009-09-27 GSS	Display free space in usage
 2013-12-08 GSS	Update URLs, version schema, default excludes, prevent backup to / file-system, read /etc/rbme.local.conf
+2015-03-26 GSS  Exclude typical in-memory stuff by default
 '
 
 COPYRIGHT="Copyright (C) 2006-2013 Schlomo Schapiro"
@@ -546,19 +547,22 @@ for source in "$@" ; do
 		$RSYNC $RSYNC_EXTRA_OPTIONS --link-dest="$lastbackup/" --relative -aSH \
 			--ignore-errors $rsync_mountpoints_option \
 			--exclude-from=<(
+                    # Exclude typical in-memory stuff by default
+                    cat <<-EOF
+                    /proc/*
+                    /run/*
+                    /sys/*
+                    /dev/shm/*
+                    /dev/pts/*
+                    /**/lost+found/*
+                    /**/.gvfs
+                    EOF
 					# Standard backup-excludes.lst, only needed if rsync_mountpoints_option is not set
 					test "$rsync_mountpoints_option" || cat <<-EOF
-					/proc/*
 					/tmp/*
-					/run/*
-					/sys/*
-					/dev/shm/*
-					/dev/pts/*
 					/mnt/*
 					/media/*
 					/vmfs/*
-					/**/lost+found/
-                    /**/.gvfs
 					EOF
 					# read backup-excludes.lst from (remote) backup source
 					if test "$is_local" ; then
