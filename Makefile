@@ -24,7 +24,7 @@ deb:	clean
 	sed -i -e 's/Version:.*/Version: $(VERSION)/' build/DEBIAN/control
 	mkdir -p build/usr/share/doc/rbme
 	mv build/DEBIAN/copyright build/usr/share/doc/rbme/copyright
-	git log | gzip -9 >build/usr/share/doc/rbme/changelog.gz
+	git log | gzip -n9 >build/usr/share/doc/rbme/changelog.gz
 	chmod -R g-w build
 	fakeroot ${DPKG} ${DPKG_OPTS} build out
 	rm -Rf build
