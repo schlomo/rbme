@@ -258,7 +258,7 @@ Project homepage: http://www.schapiro.org/schlomo/projects
 Installation
 --------------------------
 
-RBME is distributed as tar.gz archive or as noarch DEB, which is the 
+RBME is distributed as tar.gz archive or as noarch DEB (in the out/ folder), which is the 
 recommended installation method for DEB-based systems. After installing RBME 
 you have to edit /etc/rbme.local.conf to adapt RBME to your environment (at least set 
 the backup path).
