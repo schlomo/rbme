@@ -88,6 +88,7 @@ CHANGES='
 2009-09-27 GSS	Display free space in usage
 2013-12-08 GSS	Update URLs, version schema, default excludes, prevent backup to / file-system, read /etc/rbme.local.conf
 2015-03-26 GSS  Exclude typical in-memory stuff by default
+2019-09-27 GSS	Use more modern SSH ciphers, blowfish-cbc is no longer supported
 '
 
 COPYRIGHT="Copyright (C) 2006-2013 Schlomo Schapiro"
