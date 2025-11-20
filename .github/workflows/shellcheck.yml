@@ -19,8 +19,11 @@ on:
   workflow_dispatch:
 
 # Restrict permissions for pull requests to read-only for security
+# Add pull-requests: write for PR comments
 permissions:
   contents: read
+  pull-requests: write
+  checks: write
 
 jobs:
   shellcheck:
@@ -32,20 +35,48 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Run Shellcheck using the community action
+      # Verify that Shellcheck is available
+      - name: Check Shellcheck Version
+        run: |
+          shellcheck --version
+
+      # Run Shellcheck on repository with detailed output
       # ---
-      # https://github.com/ludeeus/action-shellcheck
+      # https://github.com/koalaman/shellcheck
       # ---
       # Excluded checks:
       # https://www.shellcheck.net/wiki/SC1091 -- Not following: /etc/rc.status was...
       # https://www.shellcheck.net/wiki/SC1090 -- Can't follow non-constant source. ..
       # ---
       - name: Run Shellcheck
-        uses: ludeeus/action-shellcheck@2.0.0
+        run: |
+          set +e
+          find  ./ -maxdepth 1 -type f -name rbme | while read -r sh; do
+            if [ "$(file --brief --mime-type "$sh")" == 'text/x-shellscript' ]; then
+              echo "shellcheck'ing $sh"
+              if ! shellcheck --color=always --severity=warning --exclude=SC1091,SC1090 "$sh"; then
+                touch some_scripts_have_failed_shellcheck
+              fi
+            fi
+          done
+          if [ -f ./some_scripts_have_failed_shellcheck ]; then
+            echo "Shellcheck failed for one or more shellscript(s)"
+            exit 1
+          fi
+
+      # Run reviewdog for PR comments on pull requests
+      # This step only runs on pull_request events and adds inline comments
+      - name: Run Shellcheck with reviewdog (PR comments)
+        if: github.event_name == 'pull_request'
+        uses: reviewdog/action-shellcheck@v1
         with:
-          scandir: '.'
-          severity: warning
-          ignore_paths: '.git'
-        env:
-          SHELLCHECK_OPTS: --exclude=SC1091,SC1090
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          reporter: github-pr-review
+          path: 'rbme'
+          pattern: 'rbme'
+          exclude: './.git/*'
+          check_all_files_with_shebangs: false
+          shellcheck_flags: '--severity=warning --exclude=SC1091,SC1090'
+          fail_on_error: false
+          reviewdog_flags: '-filter-mode=nofilter'
 
