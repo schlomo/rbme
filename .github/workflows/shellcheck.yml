@@ -19,11 +19,8 @@ on:
   workflow_dispatch:
 
 # Restrict permissions for pull requests to read-only for security
-# Add pull-requests: write for PR comments
 permissions:
   contents: read
-  pull-requests: write
-  checks: write
 
 jobs:
   shellcheck:
@@ -63,20 +60,4 @@ jobs:
             echo "Shellcheck failed for one or more shellscript(s)"
             exit 1
           fi
-
-      # Run reviewdog for PR comments on pull requests
-      # This step only runs on pull_request events and adds inline comments
-      - name: Run Shellcheck with reviewdog (PR comments)
-        if: github.event_name == 'pull_request'
-        uses: reviewdog/action-shellcheck@v1
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          reporter: github-pr-review
-          path: 'rbme'
-          pattern: 'rbme'
-          exclude: './.git/*'
-          check_all_files_with_shebangs: false
-          shellcheck_flags: '--severity=warning --exclude=SC1091,SC1090'
-          fail_on_error: false
-          reviewdog_flags: '-filter-mode=nofilter'
 
