@@ -6,38 +6,38 @@ on:
       # Run workflow on every push
       # only if a file within the specified paths has been changed:
       - 'rbme'
+      - '.github/workflows/shellcheck.yml'
 
   pull_request:
     paths:
       # Run workflow on every push
       # only if a file within the specified paths has been changed:
       - 'rbme'
+      - '.github/workflows/shellcheck.yml'
 
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
-jobs:
-  build:
-    name: Shellcheck Lint
+# Restrict permissions for pull requests to read-only for security
+permissions:
+  contents: read
 
-    # This job runs on Linux
+jobs:
+  shellcheck:
+    name: Shellcheck Lint
     runs-on: ubuntu-latest
 
     steps:
       # Required to access files of this repository
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      # Download Shellcheck and add it to the workflow path
-      - name: Download Shellcheck
-        run: |
-          wget -qO- "https://github.com/koalaman/shellcheck/releases/download/stable/shellcheck-stable.linux.x86_64.tar.xz" | tar -xJv
-          chmod +x shellcheck-stable/shellcheck
-      # Verify that Shellcheck can be executed
+      # Verify that Shellcheck is available
       - name: Check Shellcheck Version
         run: |
-          shellcheck-stable/shellcheck --version
+          shellcheck --version
 
-      # Run Shellcheck on repository
+      # Run Shellcheck on repository with detailed output
       # ---
       # https://github.com/koalaman/shellcheck
       # ---
@@ -47,17 +47,5 @@ jobs:
       # ---
       - name: Run Shellcheck
         run: |
-          set +e
-          find  ./ -maxdepth 1 -type f -name rbme | while read -r sh; do
-            if [ "$(file --brief --mime-type "$sh")" == 'text/x-shellscript' ]; then
-              echo "shellcheck'ing $sh"
-              if ! shellcheck-stable/shellcheck --color=always --severity=warning --exclude=SC1091,SC1090 "$sh"; then
-                touch some_scripts_have_failed_shellcheck
-              fi
-            fi
-          done
-          if [ -f ./some_scripts_have_failed_shellcheck ]; then
-            echo "Shellcheck failed for one or more shellscript(s)"
-            exit 1
-          fi
+          shellcheck --color=always --severity=warning --exclude=SC1091,SC1090 ./rbme
 
