@@ -60,7 +60,7 @@
 #
 # Authors:
 #
-# GSS	Schlomo Schapiro  <chlom+rbme@schapiro.org>
+# GSS	Schlomo Schapiro  <schlomo+rbme@schapiro.org>
 # FBU	Fridtjof Busse	  <fbusse@probusiness.de>
 # GDH   Gratien Dhaese    <gratien.dhaese@gmail.com>
 #
@@ -90,7 +90,7 @@ CHANGES='
 2013-12-08 GSS	Update URLs, version schema, default excludes, prevent backup to / file-system, read /etc/rbme.local.conf
 2015-03-26 GSS  Exclude typical in-memory stuff by default
 2019-09-27 GSS	Use more modern SSH ciphers, blowfish-cbc is no longer supported
-2025-11-17 GDH  list only lastbackups starting with [123]* (for the year)
+2025-11-21 GDH  list only lastbackups with numbers [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] for date directories
 '
 
 COPYRIGHT="Copyright (C) 2006-2025 Schlomo Schapiro"
@@ -289,7 +289,7 @@ function fixfreespaceforhost () {
 	# this list is already sorted in chronological order (due to natural sorting of
 	# YYYY-MM-dd
 
-	backups=( $(ls -d "$BACKUP_PATH/$client/"[123]*-*-* | grep -v $today | sort) )
+	backups=( $(ls -d "$BACKUP_PATH/$client/"[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] | grep -v $today | sort) )
 
 	# lastbackup is last value in array or path for today
 	if test ${#backups[@]} -gt 0 ; then
@@ -699,7 +699,7 @@ test "$STATISTICS" && {
 	total=0
 	shopt -u nullglob
 	for dir in * ; do 
-		n=$(ls -d -1 $dir/[123]*-*-* 2>/dev/null | wc -l)
+		n=$(ls -d -1 $dir/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] 2>/dev/null | wc -l)
 		test $n -gt 0 || continue
 		dirs[c]=$dir
 		history[c]=$n
